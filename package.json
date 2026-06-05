@@ -1,0 +1,16 @@
+{
+  "name": "fb-ig-telegram-bot",
+  "version": "1.0.0",
+  "description": "Facebook + Instagram auto-reply bot with Claude AI; orders forwarded to Telegram",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
