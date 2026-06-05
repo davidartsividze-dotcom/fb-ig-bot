@@ -39,6 +39,19 @@ const SHOP_CONTEXT = process.env.SHOP_CONTEXT || `
 // express — raw body აღარ გვჭირდება, JSON საკმარისია
 app.use(express.json());
 
+// ---------- დროებითი debug-ლოგი (curl-ით შესამოწმებლად) ----------
+const DEBUG_KEY = process.env.DEBUG_KEY || "dbg_okayshop_9x7p2k";
+const recentLog = [];
+function logEvent(tag, data) {
+  recentLog.push({ t: new Date().toISOString(), tag, data });
+  if (recentLog.length > 40) recentLog.shift();
+  console.log(tag, data);
+}
+app.get("/debug", (req, res) => {
+  if (req.query.key !== DEBUG_KEY) return res.sendStatus(403);
+  res.json(recentLog);
+});
+
 // ---------- მარტივი in-memory საუბრის მდგომარეობა ----------
 // (Railway-ზე restart-ზე იშლება — ეს ნორმალურია, Telegram რჩება ჩანაწერად)
 const chats = new Map();
@@ -66,6 +79,7 @@ app.get("/webhook", (req, res) => {
 app.post("/webhook", async (req, res) => {
   res.sendStatus(200); // Meta-ს მაშინვე ვუპასუხოთ
   const body = req.body;
+  logEvent("WEBHOOK", JSON.stringify(body).slice(0, 1500)); // debug
   if (!body || !Array.isArray(body.entry)) return;
 
   const platform = body.object === "instagram" ? "Instagram" : "Facebook";
