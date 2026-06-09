@@ -78,7 +78,7 @@ app.get("/debug", (req, res) => {
 // ---------- in-memory საუბრის მდგომარეობა ----------
 const chats = new Map();
 function getState(key) {
-  if (!chats.has(key)) chats.set(key, { history: [], order: {}, order_sent: false, last_mid: null });
+  if (!chats.has(key)) chats.set(key, { history: [], order: {}, order_sent: false, followup_sent: false, last_mid: null });
   return chats.get(key);
 }
 
@@ -162,16 +162,30 @@ async function handleEvent(platform, event) {
 
 // ---------- Claude AI ----------
 async function aiReply(state) {
-  const sys = SHOP_CONTEXT + "\n\n" +
-    "ამ მომხმარებელზე უკვე ცნობილია: " + JSON.stringify(state.order) + "\n\n" +
-    "უპასუხე მხოლოდ ვალიდური JSON-ით:\n" +
-    '{"reply":"<პასუხი ქართულად>","order":{"product":"","quantity":"","name":"","phone":"","address":"","summary":""}}\n' +
-    "ველების მნიშვნელობა:\n" +
-    "- product: რომელი პროდუქტი უნდა (თუ ერთი პროდუქტია, ჩაწერე ის)\n" +
-    "- quantity: რაოდენობა (თუ არ უთქვამს, ჩათვალე 1)\n" +
-    "- name / phone / address: კლიენტის სახელი / ტელეფონი / მისამართი\n" +
-    "- summary: 1 წინადადებით რა უნდა კლიენტს (ქართულად)\n" +
-    "უცნობი ველი დატოვე ცარიელი (\"\"). JSON-ის გარდა არაფერი დაწერო.";
+  let sys;
+
+  if (state.followup_sent) {
+    // გამოხმაურების რეჟიმი — შეკვეთა უკვე გაფორმებულია, ახლა მომხმარებელი შეაფასებს
+    sys = SHOP_CONTEXT + "\n\n" +
+      "⚠️ ᲛᲜᲘᲨᲕᲜᲔᲚᲝᲕᲐᲜᲘ: ეს მომხმარებელი უკვე შეკვეთას ფლობს. შენ კი გამოხმაურება სთხოვე.\n" +
+      "ახლა ის გვიზიარებს შთაბეჭდილებებს პროდუქტზე.\n" +
+      "რეაგირება: მადლობა გადაუხადე გულწრფელად, 1-2 წინადადებით. ნუ სთხოვ ახალ შეკვეთას.\n" +
+      "JSON ფორმატი:\n" +
+      '{"reply":"<მადლობა ქართულად, 1-2 წინადადება>","order":{}}\n' +
+      "JSON-ის გარდა არაფერი დაწერო.";
+  } else {
+    // ჩვეულებრივი შეკვეთის რეჟიმი
+    sys = SHOP_CONTEXT + "\n\n" +
+      "ამ მომხმარებელზე უკვე ცნობილია: " + JSON.stringify(state.order) + "\n\n" +
+      "უპასუხე მხოლოდ ვალიდური JSON-ით:\n" +
+      '{"reply":"<პასუხი ქართულად>","order":{"product":"","quantity":"","name":"","phone":"","address":"","summary":""}}\n' +
+      "ველების მნიშვნელობა:\n" +
+      "- product: რომელი პროდუქტი უნდა (თუ ერთი პროდუქტია, ჩაწერე ის)\n" +
+      "- quantity: რაოდენობა (თუ არ უთქვამს, ჩათვალე 1)\n" +
+      "- name / phone / address: კლიენტის სახელი / ტელეფონი / მისამართი\n" +
+      "- summary: 1 წინადადებით რა უნდა კლიენტს (ქართულად)\n" +
+      "უცნობი ველი დატოვე ცარიელი (\"\"). JSON-ის გარდა არაფერი დაწერო.";
+  }
 
   try {
     const resp = await fetch("https://api.anthropic.com/v1/messages", {
@@ -303,6 +317,10 @@ app.post("/telegram", async (req, res) => {
         setTimeout(async () => {
           try {
             await graphSend(targetPsid, FOLLOWUP_MSG);
+            // state-ში ვნიშნავთ რომ გამოხმაურება გავაგზავნეთ
+            const platform = fuParts[1] === "I" ? "Instagram" : "Facebook";
+            const st = getState(`${platform}:${targetPsid}`);
+            st.followup_sent = true;
             console.log("followup sent to", targetPsid);
           } catch (e) {
             console.error("followup error:", e);
