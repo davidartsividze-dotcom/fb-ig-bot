@@ -290,20 +290,32 @@ app.post("/telegram", async (req, res) => {
     const newText   = (msg.text || "") + `\n\n— სტატუსი: ${label} (${by}, ${time})`;
 
     if (confirmed) {
-      // ✅ შემდეგ ვტოვებთ 📦 ღილაკს
+      // ✅ შემდეგ — 📦 ღილაკიდან psid ამოვიღოთ და 2 წუთში ავტო-გავაგზავნოთ
       const fuMatch = (msg.reply_markup?.inline_keyboard || [])
         .flat()
         .find(btn => btn.callback_data?.startsWith("fu|"));
 
-      const remainingKeyboard = fuMatch
-        ? { inline_keyboard: [[fuMatch]] }
-        : { inline_keyboard: [] };
+      if (fuMatch) {
+        const fuParts    = fuMatch.callback_data.split("|");
+        const targetPsid = fuParts[2];
+        const delayMs    = parseInt(process.env.FOLLOWUP_DELAY_MS || "120000"); // default 2 წუთი
 
+        setTimeout(async () => {
+          try {
+            await graphSend(targetPsid, FOLLOWUP_MSG);
+            console.log("followup sent to", targetPsid);
+          } catch (e) {
+            console.error("followup error:", e);
+          }
+        }, delayMs);
+      }
+
+      // ✅ შემდეგ ყველა ღილაკი ქრება (ავტო-გაგზავნა მოხდება)
       await tgApi("editMessageText", {
         chat_id:    msg.chat?.id,
         message_id: msg.message_id,
-        text:       newText,
-        reply_markup: remainingKeyboard,
+        text:       newText + `\n⏳ გამოხმაურება გაიგზავნება ${Math.round((parseInt(process.env.FOLLOWUP_DELAY_MS || "120000"))/60000)} წუთში...`,
+        reply_markup: { inline_keyboard: [] },
       });
     } else {
       // ❌ შემდეგ ყველა ღილაკი ქრება
@@ -324,7 +336,7 @@ app.post("/telegram", async (req, res) => {
     await graphSend(targetPsid, FOLLOWUP_MSG);
 
     // Telegram-ში განახლებს
-    const newText = (msg.text || "") + `\n\n— 📦 გამოხმაურება გაიგზავნა (${by}, ${time})`;
+    const newText = (msg.text || "") + `\n\n— 📦 გამოხმაურება გაიგზავნა ახლავე (${by}, ${time})`;
     await tgApi("editMessageText", {
       chat_id:    msg.chat?.id,
       message_id: msg.message_id,
