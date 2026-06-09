@@ -102,10 +102,11 @@ function getState(key) {
     order_sent: false,
     followup_sent: false,
     last_mid: null,
-    asked_for_details: false, // ტელეფონი+მისამართი სთხოვეს
-    collecting: false,        // 30-წამიანი ლოდინის რეჟიმი
-    collect_buffer: [],       // დაბუფერებული შეტყობინებები
+    asked_for_details: false,
+    collecting: false,
+    collect_buffer: [],
     collect_timer: null,
+    crosssell_active: false,  // cross-sell შეთავაზება გაიგზავნა
   });
   return chats.get(key);
 }
@@ -176,6 +177,43 @@ async function handleEvent(platform, event) {
     return;
   }
 
+  // ── cross-sell: მომხმარებელი ეხმაურება შეთავაზებას ──
+  if (state.crosssell_active) {
+    state.history.push({ role: "user", content: text });
+    state.history = state.history.slice(-20);
+
+    // ვამოწმებთ აირჩია თუ არა პროდუქტი
+    const textLow = text.toLowerCase();
+    const chosen = PRODUCTS.find(p =>
+      p.keys.some(k => textLow.includes(k)) &&
+      !p.keys.some(k => (state.order.product || "").toLowerCase().includes(k))
+    );
+
+    if (chosen) {
+      // Telegram-ში ვაგზავნით cross-sell შეკვეთას
+      const crossOrder = {
+        ...state.order,
+        product:  chosen.name,
+        quantity: "1",
+        summary:  `cross-sell: ${chosen.name} — ${Math.round(chosen.price * (1 - CROSSSELL_DISCOUNT))} ₾ (30% ფასდაკლებით)`,
+      };
+      await sendOrderToTelegram(platform, psid, crossOrder);
+      state.crosssell_active = false;
+
+      const reply = `სიამოვნებით! ${chosen.name} დავუმატეთ შეკვეთას 🎉 მალე დაგიკავშირდებათ.`;
+      await graphSend(psid, reply);
+      state.history.push({ role: "assistant", content: reply });
+    } else {
+      // კითხვაა ან სხვა — AI პასუხობს
+      const ai = await aiReply(state);
+      const reply = (ai.reply || "").trim() || "ოპერატორი მალე დაუკავშირდება 🙏";
+      await graphSend(psid, reply);
+      state.history.push({ role: "assistant", content: reply });
+      state.history = state.history.slice(-20);
+    }
+    return;
+  }
+
   // ── ჩვეულებრივი AI ნაკადი ──
   state.history.push({ role: "user", content: text });
   state.history = state.history.slice(-20);
@@ -197,7 +235,6 @@ async function handleEvent(platform, event) {
   // ── პროდუქტი გვაქვს → მომდევნო შეტყობინებიდან ვიწყებთ შეგროვებას ──
   if (state.order.product && !state.order.phone && !state.asked_for_details) {
     state.asked_for_details = true;
-    // მომდევნო მესიჯი პირდაპირ collecting-ში შევა
     state.collecting = true;
     state.collect_buffer = [];
   }
@@ -240,7 +277,10 @@ async function processCollected(platform, psid, key) {
     if (!state.order.phone) state.order.phone = combined;
     await sendOrderToTelegram(platform, psid, state.order);
     state.order_sent = true;
-    setTimeout(() => sendCrossSell(psid, state.order.product || "", state.order.name || ""), 4000);
+    setTimeout(() => {
+      sendCrossSell(psid, state.order.product || "", state.order.name || "");
+      state.crosssell_active = true;
+    }, 4000);
   }
 }
 
