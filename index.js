@@ -4,6 +4,7 @@
 //  - პასუხობს Claude AI-ით (ქართულად)
 //  - აგროვებს შეკვეთას (სახელი/ტელეფონი/მისამართი)
 //  - მზა შეკვეთას აგზავნის Telegram-ში ✅/❌ ღილაკებით
+//  - 📦 ღილაკით გამოხმაურებას უგზავნის მომხმარებელს FB/IG-ზე
 //  Railway-ზე გასაშვებად (Node 18+, მხოლოდ express).
 // ============================================================
 
@@ -21,6 +22,10 @@ const AI_MODEL           = process.env.AI_MODEL           || "claude-sonnet-4-6"
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
 const TELEGRAM_CHAT_IDS  = (process.env.TELEGRAM_CHAT_IDS || "")
   .split(",").map(s => s.trim()).filter(Boolean);
+
+// გამოხმაურების შეტყობინება (შეიძლება Railway Variable-ით შეცვლა)
+const FOLLOWUP_MSG = process.env.FOLLOWUP_MSG ||
+  "გამარჯობა! 😊 იმედია პროდუქტი ხელში მიიღეთ! მოგეწონათ? თქვენი გამოხმაურება ძალიან მნიშვნელოვანია ჩვენთვის 🙏";
 
 // მაღაზიის ცოდნა — AI-ს კონტექსტი
 const SHOP_CONTEXT = process.env.SHOP_CONTEXT || `
@@ -55,10 +60,9 @@ const SHOP_CONTEXT = process.env.SHOP_CONTEXT || `
   და უთხარი, რომ მალე დაურეკავენ დასადასტურებლად.
 `.trim();
 
-// express — raw body აღარ გვჭირდება, JSON საკმარისია
 app.use(express.json());
 
-// ---------- დროებითი debug-ლოგი (curl-ით შესამოწმებლად) ----------
+// ---------- დროებითი debug-ლოგი ----------
 const DEBUG_KEY = process.env.DEBUG_KEY || "dbg_okayshop_9x7p2k";
 const recentLog = [];
 function logEvent(tag, data) {
@@ -71,8 +75,7 @@ app.get("/debug", (req, res) => {
   res.json(recentLog);
 });
 
-// ---------- მარტივი in-memory საუბრის მდგომარეობა ----------
-// (Railway-ზე restart-ზე იშლება — ეს ნორმალურია, Telegram რჩება ჩანაწერად)
+// ---------- in-memory საუბრის მდგომარეობა ----------
 const chats = new Map();
 function getState(key) {
   if (!chats.has(key)) chats.set(key, { history: [], order: {}, order_sent: false, last_mid: null });
@@ -83,7 +86,6 @@ function getState(key) {
 //  Meta Webhook
 // ============================================================
 
-// 1) ვერიფიკაცია
 app.get("/webhook", (req, res) => {
   const mode      = req.query["hub.mode"];
   const token     = req.query["hub.verify_token"];
@@ -94,11 +96,10 @@ app.get("/webhook", (req, res) => {
   return res.sendStatus(403);
 });
 
-// 2) შემოსული მესიჯები
 app.post("/webhook", async (req, res) => {
-  res.sendStatus(200); // Meta-ს მაშინვე ვუპასუხოთ
+  res.sendStatus(200);
   const body = req.body;
-  logEvent("WEBHOOK", JSON.stringify(body).slice(0, 1500)); // debug
+  logEvent("WEBHOOK", JSON.stringify(body).slice(0, 1500));
   if (!body || !Array.isArray(body.entry)) return;
 
   const platform = body.object === "instagram" ? "Instagram" : "Facebook";
@@ -126,7 +127,6 @@ async function handleEvent(platform, event) {
   const key   = `${platform}:${psid}`;
   const state = getState(key);
 
-  // დუბლიკატის დაცვა
   if (mid && state.last_mid === mid) return;
   state.last_mid = mid;
 
@@ -238,7 +238,9 @@ async function sendOrderToTelegram(platform, psid, o) {
   const id = `${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
 
   const emoji = platform === "Instagram" ? "📸" : "💬";
+  const platCode = platform === "Instagram" ? "I" : "F";
   const dash = v => (v && String(v).trim()) ? v : "—";
+
   const txt =
     `🛒 ახალი შეკვეთა! ${emoji} (${platform})\n\n` +
     `📦 პროდუქტი: ${dash(o.product)}\n` +
@@ -249,11 +251,17 @@ async function sendOrderToTelegram(platform, psid, o) {
     `📝 შეჯამება: ${dash(o.summary)}\n\n` +
     `🕒 ${stamp}`;
 
+  // callback_data ლიმიტი 64 ბაიტი — psid ~15 სიმბოლო, ჯდება
   const markup = {
-    inline_keyboard: [[
-      { text: "✅ დარეკილია", callback_data: `st|c|${id}` },
-      { text: "❌ უარი",      callback_data: `st|x|${id}` },
-    ]],
+    inline_keyboard: [
+      [
+        { text: "✅ დარეკილია", callback_data: `st|c|${id}` },
+        { text: "❌ უარი",      callback_data: `st|x|${id}` },
+      ],
+      [
+        { text: "📦 მომხმარებელს მივწერო?", callback_data: `fu|${platCode}|${psid}` },
+      ],
+    ],
   };
 
   for (const cid of TELEGRAM_CHAT_IDS) {
@@ -261,29 +269,70 @@ async function sendOrderToTelegram(platform, psid, o) {
   }
 }
 
-// Telegram webhook — ✅/❌ ღილაკების დამუშავება
+// ---------- Telegram Webhook — ✅/❌/📦 ღილაკების დამუშავება ----------
 app.post("/telegram", async (req, res) => {
   res.sendStatus(200);
   const update = req.body;
   const cb = update && update.callback_query;
   if (!cb) return;
 
-  const data = cb.data || "";
-  const msg  = cb.message || {};
+  const data  = cb.data || "";
+  const msg   = cb.message || {};
   const parts = data.split("|");
+  const by    = cb.from?.first_name || "";
+  const hh    = new Date();
+  const time  = `${String(hh.getHours()).padStart(2,"0")}:${String(hh.getMinutes()).padStart(2,"0")}`;
+
+  // ✅ დარეკილია / ❌ უარი
   if (parts.length === 3 && parts[0] === "st") {
-    const label = parts[1] === "c" ? "✅ დარეკილია" : "❌ უარი";
-    const by    = cb.from?.first_name || "";
-    const hh    = new Date();
-    const time  = `${String(hh.getHours()).padStart(2,"0")}:${String(hh.getMinutes()).padStart(2,"0")}`;
-    const newText = (msg.text || "") + `\n\n— სტატუსი: ${label} (${by}, ${time})`;
+    const confirmed = parts[1] === "c";
+    const label     = confirmed ? "✅ დარეკილია" : "❌ უარი";
+    const newText   = (msg.text || "") + `\n\n— სტატუსი: ${label} (${by}, ${time})`;
+
+    if (confirmed) {
+      // ✅ შემდეგ ვტოვებთ 📦 ღილაკს
+      const fuMatch = (msg.reply_markup?.inline_keyboard || [])
+        .flat()
+        .find(btn => btn.callback_data?.startsWith("fu|"));
+
+      const remainingKeyboard = fuMatch
+        ? { inline_keyboard: [[fuMatch]] }
+        : { inline_keyboard: [] };
+
+      await tgApi("editMessageText", {
+        chat_id:    msg.chat?.id,
+        message_id: msg.message_id,
+        text:       newText,
+        reply_markup: remainingKeyboard,
+      });
+    } else {
+      // ❌ შემდეგ ყველა ღილაკი ქრება
+      await tgApi("editMessageText", {
+        chat_id:    msg.chat?.id,
+        message_id: msg.message_id,
+        text:       newText,
+        reply_markup: { inline_keyboard: [] },
+      });
+    }
+  }
+
+  // 📦 გამოხმაურება — FB/IG-ზე მიუწერე მომხმარებელს
+  else if (parts.length === 3 && parts[0] === "fu") {
+    const targetPsid = parts[2];
+
+    // FB/IG-ზე გზავნის შეტყობინებას
+    await graphSend(targetPsid, FOLLOWUP_MSG);
+
+    // Telegram-ში განახლებს
+    const newText = (msg.text || "") + `\n\n— 📦 გამოხმაურება გაიგზავნა (${by}, ${time})`;
     await tgApi("editMessageText", {
-      chat_id: msg.chat?.id,
+      chat_id:    msg.chat?.id,
       message_id: msg.message_id,
-      text: newText,
+      text:       newText,
       reply_markup: { inline_keyboard: [] },
     });
   }
+
   await tgApi("answerCallbackQuery", { callback_query_id: cb.id });
 });
 
