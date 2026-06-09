@@ -124,7 +124,7 @@ async function handleEvent(platform, event) {
   if (!reply) reply = "ერთ წუთს, ოპერატორი მალე გიპასუხებთ 🙏";
 
   if (ai.order && typeof ai.order === "object") {
-    for (const k of ["name", "phone", "address"]) {
+    for (const k of ["product", "quantity", "name", "phone", "address", "summary"]) {
       if (ai.order[k]) state.order[k] = String(ai.order[k]).trim();
     }
   }
@@ -146,8 +146,13 @@ async function aiReply(state) {
   const sys = SHOP_CONTEXT + "\n\n" +
     "ამ მომხმარებელზე უკვე ცნობილია: " + JSON.stringify(state.order) + "\n\n" +
     "უპასუხე მხოლოდ ვალიდური JSON-ით:\n" +
-    '{"reply":"<პასუხი ქართულად>","order":{"name":"","phone":"","address":""}}\n' +
-    "უცნობი ველი დატოვე ცარიელი. JSON-ის გარდა არაფერი.";
+    '{"reply":"<პასუხი ქართულად>","order":{"product":"","quantity":"","name":"","phone":"","address":"","summary":""}}\n' +
+    "ველების მნიშვნელობა:\n" +
+    "- product: რომელი პროდუქტი უნდა (თუ ერთი პროდუქტია, ჩაწერე ის)\n" +
+    "- quantity: რაოდენობა (თუ არ უთქვამს, ჩათვალე 1)\n" +
+    "- name / phone / address: კლიენტის სახელი / ტელეფონი / მისამართი\n" +
+    "- summary: 1 წინადადებით რა უნდა კლიენტს (ქართულად)\n" +
+    "უცნობი ველი დატოვე ცარიელი (\"\"). JSON-ის გარდა არაფერი დაწერო.";
 
   try {
     const resp = await fetch("https://api.anthropic.com/v1/messages", {
@@ -214,11 +219,15 @@ async function sendOrderToTelegram(platform, psid, o) {
   const id = `${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
 
   const emoji = platform === "Instagram" ? "📸" : "💬";
+  const dash = v => (v && String(v).trim()) ? v : "—";
   const txt =
     `🛒 ახალი შეკვეთა! ${emoji} (${platform})\n\n` +
-    `👤 სახელი: ${o.name}\n` +
-    `📞 ტელეფონი: ${o.phone}\n` +
-    `📍 მისამართი: ${o.address}\n\n` +
+    `📦 პროდუქტი: ${dash(o.product)}\n` +
+    `🔢 რაოდენობა: ${dash(o.quantity)}\n` +
+    `👤 სახელი: ${dash(o.name)}\n` +
+    `📞 ტელეფონი: ${dash(o.phone)}\n` +
+    `📍 მისამართი: ${dash(o.address)}\n` +
+    `📝 შეჯამება: ${dash(o.summary)}\n\n` +
     `🕒 ${stamp}`;
 
   const markup = {
