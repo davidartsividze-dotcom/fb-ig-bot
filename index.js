@@ -27,6 +27,18 @@ const TELEGRAM_CHAT_IDS  = (process.env.TELEGRAM_CHAT_IDS || "")
 const FOLLOWUP_MSG = process.env.FOLLOWUP_MSG ||
   "გამარჯობა! 😊 იმედია პროდუქტი ხელში მიიღეთ! მოგეწონათ? თქვენი გამოხმაურება ძალიან მნიშვნელოვანია ჩვენთვის 🙏";
 
+// პროდუქტების სია (cross-sell-ისთვის)
+const PRODUCTS = [
+  { name: "Derol ტუში",                  price: 29, keys: ["ტუში", "tushi"] },
+  { name: "Derol ტონალური",              price: 35, keys: ["ტონალური", "tonaluri"] },
+  { name: "Derol ლაინერი",               price: 20, keys: ["ლაინერი", "laineri"] },
+  { name: "Derol წარბის გელი",           price: 35, keys: ["წარბის", "warbis"] },
+  { name: "Soft Skin ტანის ხელთათმანი", price: 29, keys: ["ტანის", "tanis"] },
+  { name: "Soft Skin სახის ხელთათმანი", price: 25, keys: ["სახის", "saxis"] },
+  { name: "Maffick ქონსილერი",           price: 29, keys: ["ქონსილერი", "konsileri", "maffick"] },
+];
+const CROSSSELL_DISCOUNT = 0.30; // 30%
+
 // მაღაზიის ცოდნა — AI-ს კონტექსტი
 const SHOP_CONTEXT = process.env.SHOP_CONTEXT || `
 შენ ხარ "Okayshop"-ის (okayshop.ge) გაყიდვების ასისტენტი Facebook/Instagram-ზე.
@@ -153,6 +165,8 @@ async function handleEvent(platform, event) {
   if (complete && !state.order_sent) {
     await sendOrderToTelegram(platform, psid, o);
     state.order_sent = true;
+    // cross-sell — 3 წამში გავაგზავნოთ (მაშინ, სანამ AI-ს პასუხი წასულია)
+    setTimeout(() => sendCrossSell(psid, o.product || ""), 3000);
   }
 
   await graphSend(psid, reply);
@@ -213,6 +227,32 @@ async function aiReply(state) {
     console.error("aiReply error:", e);
     return { reply: "", order: {} };
   }
+}
+
+// ---------- Cross-sell ----------
+async function sendCrossSell(psid, purchasedProduct) {
+  const bought = purchasedProduct.toLowerCase();
+
+  // შეძენილი პროდუქტი გამოვრიცხოთ
+  const others = PRODUCTS.filter(p =>
+    !p.keys.some(k => bought.includes(k))
+  );
+
+  if (others.length === 0) return; // ყველა პროდუქტი შეიძინა
+
+  const discountedList = others.map(p => {
+    const sale = Math.round(p.price * (1 - CROSSSELL_DISCOUNT));
+    return `• ${p.name}: ~~${p.price}₾~~ → ${sale}₾`;
+  }).join("\n");
+
+  const msg =
+    `🎁 სპეციალური შეთავაზება მხოლოდ შენთვის!\n\n` +
+    `შენი შეკვეთის გამო დღეს გაქვს 30% ფასდაკლება:\n\n` +
+    discountedList + `\n\n` +
+    `⏰ შეთავაზება მოქმედებს 24 საათი.\n` +
+    `დაინტერესების შემთხვევაში უბრალოდ მომწერე! 😊`;
+
+  await graphSend(psid, msg);
 }
 
 // ---------- Meta Send API ----------
